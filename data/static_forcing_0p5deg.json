@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "source": "gs://weatherbench2/datasets/era5/1959-2023_01_10-wb13-6h-1440x721_with_derived_variables.zarr",
+  "variables": [
+    "geopotential_at_surface",
+    "land_sea_mask"
+  ],
+  "regridding_method": "first_order_conservative_area_overlap_aligned_periodic",
+  "regridding_version": 2,
+  "shape": [
+    361,
+    720
+  ],
+  "normalization": "spherical_latitude_cell_area_zscore",
+  "surface_geopotential_mean": 2270.4008010793527,
+  "surface_geopotential_std": 6112.1813432451845,
+  "land_sea_mask_mean": 0.2859312495332182,
+  "land_sea_mask_std": 0.4373637000499993,
+  "bundle_sha256": "ca51c3108f68051154d78a81a2e5e1218acfaa221543e215ebff8df26d97b43c"
+}

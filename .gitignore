@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+wandb/
+runs/
+*.log
+*.tmp
+*.partial/
+data/raw/
+
+# Large inference assets are distributed in GitHub Releases
+checkpoints/**/*.pt
+data/stats/*.npy
+data/static_forcing_0p5deg.npz
+.DS_Store
+**/.DS_Store

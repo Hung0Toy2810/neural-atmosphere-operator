@@ -1,0 +1,30 @@
+{
+  "file": "checkpoints/stage2/best.pt",
+  "sha256": "2ef924099a8a47e421eb014246d66a20ea7765c4e250293790fccfe25bd5b82f",
+  "checkpoint_version": 3,
+  "selection": "lowest validation loss",
+  "epoch_zero_based": 3,
+  "completed_updates": 78892,
+  "best_validation_loss": 0.12538444922294145,
+  "stage": "stage2_k1_spherical_residual_corrector_v2",
+  "seed": 42,
+  "training_rollout_steps": 1,
+  "time_step_hours": 6,
+  "architecture": {
+    "grid": [361, 720],
+    "input_channels": 142,
+    "output_channels": 71,
+    "embedding_width": 192,
+    "layers": 6,
+    "forcing": "solar_static_time",
+    "corrector_hidden_channels": 84,
+    "corrector_depth": 4
+  },
+  "training_runtime": {
+    "python": "3.12.3",
+    "torch": "2.8.0+cu128",
+    "torch_harmonics": "0.7.4",
+    "cuda_runtime": "12.8",
+    "gpu": "NVIDIA RTX PRO 4500 Blackwell"
+  }
+}

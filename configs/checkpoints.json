@@ -1,0 +1,25 @@
+{
+  "selection_rule": "lowest validation loss within each stage",
+  "checkpoints": [
+    {
+      "stage": 1,
+      "file": "checkpoints/stage1/best.pt",
+      "sha256": "950782f3dc756ddbce2995f9aa6183870f5259bb76b84ad306cece30844233be",
+      "size_bytes": 966673255,
+      "epoch_zero_based": 24,
+      "completed_updates": 187850,
+      "best_validation_loss": 0.13444305187815098,
+      "architecture": "SFNO E192/L6, one-state input"
+    },
+    {
+      "stage": 2,
+      "file": "checkpoints/stage2/best.pt",
+      "sha256": "2ef924099a8a47e421eb014246d66a20ea7765c4e250293790fccfe25bd5b82f",
+      "size_bytes": 679480965,
+      "epoch_zero_based": 3,
+      "completed_updates": 78892,
+      "best_validation_loss": 0.12538444922294145,
+      "architecture": "SFNO E192/L6, two-state input, E84 spherical corrector"
+    }
+  ]
+}

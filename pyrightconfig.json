@@ -1,0 +1,51 @@
+{
+  "include": [
+    "configs",
+    "data",
+    "eval",
+    "scripts",
+    "stages/stage1",
+    "stages/stage2"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/.pytest_cache",
+    "**/.venv",
+    "**/audit/2026-09-06",
+    "**/data/dataset",
+    "data/dataset",
+    "results",
+    "checkpoints"
+  ],
+  "typeCheckingMode": "basic",
+  "pythonVersion": "3.11",
+  "executionEnvironments": [
+    {
+      "root": "stages/stage1",
+      "extraPaths": [
+        "stages/stage1/src",
+        "stages/stage1/configs",
+        "stages/stage1",
+        "."
+      ]
+    },
+    {
+      "root": "stages/stage2",
+      "extraPaths": [
+        "stages/stage2/src",
+        "stages/stage2/configs",
+        "stages/stage2",
+        "."
+      ]
+    },
+    {
+      "root": ".",
+      "extraPaths": [
+        "stages/stage2/src",
+        "stages/stage2/configs",
+        "stages/stage2",
+        "."
+      ]
+    }
+  ]
+}

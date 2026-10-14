@@ -1,0 +1,2 @@
+lead,lead_hours,normalized_mse,normalized_rmse,normalized_mae,normalized_acc,samples,acc_valid_channels,acc_total_channels,rmse_growth_from_lead1,objective_loss
+1,6.0,0.023989277548788993,0.15488472341967427,0.08655458671852902,0.9841209129548408,12,71,71,0.0,0.13532498478889465

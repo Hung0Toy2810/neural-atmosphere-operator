@@ -1,0 +1,11 @@
+{
+  "test_month": "2020-07",
+  "seed": 42,
+  "cadence_hours": 6,
+  "resolution_degrees": 0.5,
+  "lead_hours": [6, 12, 24, 72, 120, 168],
+  "default_sample_selection": "all 95 valid initializations whose 7-day truth remains in July",
+  "submitted_sample_selection": "12 evenly spaced initializations from the 95-window panel; exact indices and times are recorded in run_metadata.json",
+  "metrics": ["latitude-weighted RMSE", "latitude-weighted ACC", "latitude-weighted bias"],
+  "acc_climatology": "training-only long-term spatial mean"
+}

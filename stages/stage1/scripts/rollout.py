@@ -1,0 +1,264 @@
+"""Run autoregressive inference and stream physical fields to a Zarr store."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+from typing import cast
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(PROJECT_ROOT), str(PROJECT_ROOT / "src")]
+
+import numpy as np
+import torch
+import zarr
+
+from configs.pipeline_config import DataPaths
+from neural_atmosphere_operator.pipeline.checkpoint import load_checkpoint
+from neural_atmosphere_operator.pipeline.dependencies import (
+    enforce_checkpoint_runtime,
+    validate_supported_runtime,
+)
+from neural_atmosphere_operator.pipeline.contracts import enforce_forecast_contract
+from neural_atmosphere_operator.pipeline.forecast import forecast_states
+from neural_atmosphere_operator.pipeline.runtime import (
+    amp_context,
+    build_loader,
+    build_model,
+    checkpoint_time_step,
+    choose_device,
+    model_config_from_dict,
+    move_batch,
+    statistics_signature,
+    dataset_signature,
+)
+from neural_atmosphere_operator.utils.logger import setup_logger
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--checkpoint", type=Path, required=True)
+    parser.add_argument("--data-dir", type=Path, default=DataPaths().root)
+    parser.add_argument("--data-path", type=Path)
+    parser.add_argument("--means-path", type=Path)
+    parser.add_argument("--stds-path", type=Path)
+    parser.add_argument("--split", choices=("train", "valid", "test"), default="test")
+    parser.add_argument("--rollout-steps", type=int, default=4)
+    parser.add_argument("--time-step", type=int)
+    parser.add_argument("--samples", type=int, default=1)
+    parser.add_argument(
+        "--forecast-only",
+        action="store_true",
+        help="Forecast beyond the observed store without requiring future targets",
+    )
+    parser.add_argument("--start-index", type=int, default=0)
+    parser.add_argument("--device", default="auto")
+    parser.add_argument("--amp-dtype", choices=("bfloat16", "float16"))
+    parser.add_argument("--no-amp", action="store_true")
+    parser.add_argument(
+        "--deterministic", action=argparse.BooleanOptionalAction, default=None
+    )
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--allow-runtime-mismatch", action="store_true")
+    parser.add_argument("--allow-data-mismatch", action="store_true")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    if min(args.rollout_steps, args.samples) < 1 or args.start_index < 0:
+        raise ValueError("Positive rollout/samples and non-negative start are required")
+    checkpoint_path = args.checkpoint.expanduser().resolve()
+    output = (
+        args.output.expanduser().resolve()
+        if args.output
+        else checkpoint_path.parents[1] / f"rollout_{args.split}.zarr"
+    )
+    if output.exists():
+        raise FileExistsError(f"Refusing to overwrite existing rollout: {output}")
+    temporary = output.with_name(output.name + ".part")
+    if temporary.exists():
+        raise FileExistsError(f"Stale partial rollout exists: {temporary}")
+    logger = setup_logger(log_file=output.with_suffix(".log"))
+    device = choose_device(args.device)
+    checkpoint = load_checkpoint(checkpoint_path, torch.device("cpu"))
+    torch.use_deterministic_algorithms(
+        args.deterministic
+        if args.deterministic is not None
+        else bool(checkpoint.get("runtime", {}).get("deterministic_algorithms", False))
+    )
+    runtime = validate_supported_runtime(device)
+    mismatches = enforce_checkpoint_runtime(
+        checkpoint, runtime, allow_mismatch=args.allow_runtime_mismatch
+    )
+    if mismatches:
+        logger.warning("Runtime mismatch: %s", ", ".join(mismatches))
+    model_config = model_config_from_dict(checkpoint["model_config"])
+    model = build_model(model_config, device)
+    model.load_state_dict(checkpoint["model_state"])
+    model.eval()
+    checkpoint.pop("optimizer_state", None)
+    checkpoint.pop("model_state", None)
+
+    paths = DataPaths(args.data_dir.expanduser().resolve())
+    training = checkpoint.get("training_config", {})
+    amp_dtype = args.amp_dtype or str(training.get("amp_dtype", "bfloat16"))
+    history = model_config.in_channels // model_config.out_channels - 1
+    time_step = checkpoint_time_step(training, args.time_step)
+    means_path = args.means_path or paths.means
+    stds_path = args.stds_path or paths.stds
+    saved_data_signature = training.get("data_signature", {})
+    for name, path in (("means", means_path), ("stds", stds_path)):
+        saved = saved_data_signature.get(name)
+        current = statistics_signature(path)
+        if isinstance(saved, dict) and saved.get("sha256") != current["sha256"]:
+            if not args.allow_data_mismatch:
+                raise RuntimeError(
+                    f"{name} statistics differ from checkpoint training data"
+                )
+            logger.warning("Using mismatched %s statistics", name)
+    loader, dataset = build_loader(
+        paths,
+        args.split,
+        rollout_steps=args.rollout_steps,
+        history=history,
+        time_step=time_step,
+        batch_size=1,
+        num_workers=0,
+        data_path=args.data_path,
+        means_path=means_path,
+        stds_path=stds_path,
+        require_targets=not args.forecast_only,
+        lazy_targets=True,
+        time_conditioning=model_config.forcing_channels > 0,
+    )
+    enforce_forecast_contract(
+        training, dataset, time_step, args.split, diagnostic=args.allow_data_mismatch
+    )
+    if dataset.spatial_shape != model_config.img_size:
+        raise ValueError(
+            "Dataset grid differs from checkpoint; regrid explicitly before forecasting"
+        )
+    del loader
+    if args.start_index + args.samples > len(dataset):
+        raise IndexError("Requested rollout samples exceed the dataset")
+
+    channels = model_config.out_channels
+    height, width = dataset.spatial_shape
+    group = zarr.open_group(str(temporary), mode="w")
+    shape = (args.samples, args.rollout_steps, channels, height, width)
+    chunks = (1, 1, 1, height, width)
+    predictions = group.create_dataset(
+        "prediction", shape=shape, chunks=chunks, dtype="f4"
+    )
+    targets = (
+        None
+        if args.forecast_only
+        else group.create_dataset("target", shape=shape, chunks=chunks, dtype="f4")
+    )
+    time_indices = group.create_dataset(
+        "initial_time_index", shape=(args.samples,), dtype="i8"
+    )
+    initial_times = group.create_dataset(
+        "initial_time_unix_ns", shape=(args.samples,), dtype="i8"
+    )
+    valid_times = group.create_dataset(
+        "valid_time_unix_ns",
+        shape=(args.samples, args.rollout_steps),
+        chunks=(1, args.rollout_steps),
+        dtype="i8",
+    )
+    group.create_dataset("latitude", data=dataset.latitudes)
+    group.create_dataset("longitude", data=dataset.longitudes)
+    group.attrs.update(
+        checkpoint=str(checkpoint_path),
+        checkpoint_sha256=statistics_signature(checkpoint_path)["sha256"],
+        forecast_contract=training["forecast_contract"],
+        data_signature=dataset_signature(dataset),
+        statistics={
+            name: statistics_signature(path)
+            for name, path in (("means", means_path), ("stds", stds_path))
+        },
+        forecast_only=args.forecast_only,
+        diagnostic_run=bool(
+            args.allow_data_mismatch
+            or args.allow_runtime_mismatch
+            or training.get("diagnostic_run")
+        ),
+        split=args.split,
+        rollout_steps=args.rollout_steps,
+        time_step_hours=time_step * dataset.cadence_hours,
+        time_encoding="nanoseconds since 1970-01-01T00:00:00",
+        channel_names=list(dataset.channel_names),
+        channel_units=list(dataset.channel_units),
+    )
+    amp_enabled = (
+        not args.no_amp
+        and not bool(training.get("no_amp", False))
+        and device.type == "cuda"
+    )
+    try:
+        with torch.inference_mode():
+            for output_index, sample_index in enumerate(
+                range(args.start_index, args.start_index + args.samples)
+            ):
+                raw = dataset[sample_index]
+                batch = move_batch(
+                    {
+                        key: cast(torch.Tensor, value).unsqueeze(0)
+                        for key, value in raw.items()
+                    },
+                    device,
+                    keep_targets_cpu=True,
+                )
+                with amp_context(device, amp_enabled, amp_dtype):
+                    for lead, prediction in enumerate(
+                        forecast_states(
+                            model,
+                            batch["input"],
+                            args.rollout_steps,
+                            forcing_time_features=batch.get(
+                                "forcing_time_features"
+                            ),
+                        )
+                    ):
+                        if not torch.isfinite(prediction).all():
+                            raise FloatingPointError(
+                                f"Non-finite forecast at lead {lead + 1}"
+                            )
+                        prediction_raw = dataset.normalizer.denormalize(
+                            prediction.float().cpu()
+                        )
+                        predictions[output_index, lead] = np.asarray(prediction_raw[0])
+                        if targets is not None:
+                            target_raw = dataset._read_timestep_channels(
+                                dataset._get_dataset(),
+                                int(raw["target_time_indices"][lead]),
+                            )
+                            targets[output_index, lead] = np.asarray(target_raw)
+                time_indices[output_index] = int(raw["time_index"])
+                base_index = int(raw["time_index"])
+                initial_times[output_index] = int(
+                    dataset.times[base_index].astype(np.int64)
+                )
+                for lead in range(args.rollout_steps):
+                    valid_times[output_index, lead] = int(
+                        dataset.times[base_index].astype(np.int64)
+                        + int(
+                            (lead + 1)
+                            * time_step
+                            * dataset.cadence_hours
+                            * 3_600_000_000_000
+                        )
+                    )
+                logger.info("Saved sample %d", sample_index)
+        os.replace(temporary, output)
+    finally:
+        dataset.close()
+    logger.info("Rollout written to %s", output)
+
+
+if __name__ == "__main__":
+    main()
