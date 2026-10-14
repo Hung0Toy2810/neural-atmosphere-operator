@@ -17,3 +17,6 @@ data/stats/*.npy
 data/static_forcing_0p5deg.npz
 .DS_Store
 **/.DS_Store
+
+# Local presentation notes
+*_Presentation_Notes.ipynb
